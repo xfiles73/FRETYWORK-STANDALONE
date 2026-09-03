@@ -74,6 +74,33 @@ button[role="combobox"]>span{display:block!important;overflow:hidden!important;t
     let audioContext = null;
     let synth = null;
     let isInitialized = false;
+    let isLibraryLoaded = false;
+
+    // Attendi che la libreria soundfont sia caricata
+    function waitForSoundfontLibrary() {
+        return new Promise((resolve, reject) => {
+            if (typeof soundfont !== 'undefined') {
+                isLibraryLoaded = true;
+                resolve();
+                return;
+            }
+            
+            let attempts = 0;
+            const maxAttempts = 50; // 5 secondi di attesa massima
+            const checkInterval = setInterval(() => {
+                attempts++;
+                if (typeof soundfont !== 'undefined') {
+                    clearInterval(checkInterval);
+                    isLibraryLoaded = true;
+                    console.log('Libreria SoundFont caricata con successo');
+                    resolve();
+                } else if (attempts >= maxAttempts) {
+                    clearInterval(checkInterval);
+                    reject(new Error('Timeout: libreria SoundFont non caricata'));
+                }
+            }, 100);
+        });
+    }
 
     // Mappa note MIDI a frequenze
     function midiToFreq(midi) {
@@ -85,7 +112,11 @@ button[role="combobox"]>span{display:block!important;overflow:hidden!important;t
         if (isInitialized) return;
         
         try {
+            // Attendi che la libreria sia caricata
+            await waitForSoundfontLibrary();
+            
             audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            console.log('Inizializzazione strumento: acoustic_guitar_nylon...');
             synth = await soundfont.instrument(audioContext, 'acoustic_guitar_nylon', {
                 destination: audioContext.destination,
                 gain: 0.5,
@@ -95,9 +126,10 @@ button[role="combobox"]>span{display:block!important;overflow:hidden!important;t
                 release: 0.5
             });
             isInitialized = true;
-            console.log('SoundFont synth inizializzato con chitarra classica');
+            console.log('✓ SoundFont synth inizializzato con chitarra classica');
         } catch (e) {
-            console.error('Errore inizializzazione SoundFont:', e);
+            console.error('✗ Errore inizializzazione SoundFont:', e);
+            throw e;
         }
     }
 
