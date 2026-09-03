@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FretWork - SoundFont Synth Integration</title>
+    
+    <!-- Caricamento React e Babel -->
+    <script src="https://unpkg.com/react@17/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Caricamento SoundFont Player -->
+    <script src="https://cdn.jsdelivr.net/npm/soundfont-player@0.12.0/dist/soundfont-player.min.js"></script>
+
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1e1e1e;
+            color: #ffffff;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h1 { margin-bottom: 10px; }
+        
+        .controls {
+            margin-bottom: 20px;
+            background: #2d2d2d;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        select, button {
+            padding: 8px 12px;
+            border-radius: 4px;
+            border: 1px solid #444;
+            background: #3a3a3a;
+            color: white;
+            cursor: pointer;
+        }
+
+        button:hover { background: #4a4a4a; }
+        button.active { background: #007acc; border-color: #007acc; }
+
+        #app {
+            width: 100%;
+            max-width: 1200px;
+            background: #252526;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.4);
+        }
+
+        /* Stili base per la tastiera */
+        .keyboard-container {
+            position: relative;
+            height: 200px;
+            background: #111;
+            overflow-x: auto;
+            user-select: none;
+        }
+        
+        .white-key {
+            position: absolute;
+            bottom: 0;
+            width: 40px;
+            height: 100%;
+            background: white;
+            border: 1px solid #ccc;
+            border-radius: 0 0 4px 4px;
+            z-index: 1;
+            cursor: pointer;
+        }
+        
+        .white-key.active { background: #ddd; }
+        .white-key.playing { background: #4CAF50 !important; }
+
+        .black-key {
+            position: absolute;
+            bottom: 0;
+            width: 24px;
+            height: 60%;
+            background: black;
+            z-index: 2;
+            border-radius: 0 0 4px 4px;
+            cursor: pointer;
+        }
+        
+        .black-key.active { background: #333; }
+        .black-key.playing { background: #4CAF50 !important; }
+
+        .fretboard {
+            padding: 20px;
+            text-align: center;
+        }
+        
+        .string-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 10px 0;
+            position: relative;
+            height: 30px;
+        }
+        
+        .string-line {
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: #888;
+            z-index: 0;
+        }
+
+        .fret-marker {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: #444;
+            z-index: 1;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            transition: all 0.1s;
+        }
+
+        .fret-marker.active { background: #666; }
+        .fret-marker.playing { 
+            background: #ffeb3b; 
+            color: #000;
+            transform: scale(1.2);
+            box-shadow: 0 0 10px #ffeb3b;
+        }
+
+        .status-bar {
+            margin-top: 10px;
+            font-size: 0.9em;
+            color: #aaa;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>FretWork + SoundFont Synth</h1>
+
+    <div class="controls">
+        <div>
+            <label for="instrument">Strumento:</label>
+            <select id="instrument">
+                <option value="acoustic_guitar_nylon">Chitarra Nylon</option>
+                <option value="acoustic_guitar_steel" selected>Chitarra Steel</option>
+                <option value="electric_guitar_clean">Chitarra Elettrica Clean</option>
+                <option value="electric_guitar_distortion">Chitarra Distortion</option>
+                <option value="piano">Pianoforte</option>
+                <option value="strings">Archi</option>
+            </select>
+        </div>
+        
+        <div>
+            <label for="volume">Volume:</label>
+            <input type="range" id="volume" min="0" max="1" step="0.1" value="0.7">
+        </div>
+
+        <button id="init-audio">🔊 Attiva Audio</button>
+        <span id="audio-status" style="color: #ff5555; font-size: 0.8em;">(Clicca per avviare)</span>
+    </div>
+
+    <div id="app"></div>
+    <div class="status-bar" id="status-text">Pronto. Seleziona uno strumento e clicca "Attiva Audio".</div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- CONFIGURAZIONE AUDIO GLOBALE ---
+        let audioContext = null;
+        let currentInstrument = null;
+        let isAudioReady = false;
+
+        async function initAudio(instrumentName) {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioContext.state === 'suspended') {
+                await audioContext.resume();
+            }
+            
+            document.getElementById('audio-status').textContent = "(Caricamento campioni...)";
+            document.getElementById('audio-status').style.color = "#ffa500";
+
+            try {
+                // Carica lo strumento specifico da SoundFont
+                currentInstrument = await soundfont.instrument(audioContext, instrumentName, {
+                    gain: 1.0,
+                    destination: audioContext.destination
+                });
+                
+                isAudioReady = true;
+                document.getElementById('audio-status').textContent = "(Audio Pronto)";
+                document.getElementById('audio-status').style.color = "#4CAF50";
+                updateStatus(`Strumento caricato: ${instrumentName}`);
+            } catch (e) {
+                console.error("Errore caricamento SoundFont:", e);
+                document.getElementById('audio-status').textContent = "(Errore caricamento)";
+                document.getElementById('audio-status').style.color = "#ff5555";
+            }
+        }
+
+        function playNote(midiNumber, duration = 1.0) {
+            if (!isAudioReady || !currentInstrument) return;
+            
+            const volume = parseFloat(document.getElementById('volume').value);
+            // Play nota MIDI con velocity 127 (max) e durata in secondi
+            currentInstrument.play(midiNumber, audioContext.currentTime, {
+                gain: volume,
+                duration: duration
+            });
+        }
+
+        function updateStatus(msg) {
+            document.getElementById('status-text').textContent = msg;
+        }
+
+        // --- COMPONENTI REACT ---
+
+        const PianoKey = ({ note, isBlack, midi, isActive, onPlay }) => {
+            const [isPlaying, setIsPlaying] = useState(false);
+
+            const handleMouseDown = () => {
+                onPlay(midi, note);
+                setIsPlaying(true);
+            };
+
+            const handleMouseUp = () => {
+                setIsPlaying(false);
+            };
+
+            const handleMouseLeave = () => {
+                setIsPlaying(false);
+            };
+
+            const style = {
+                left: isBlack ? `${(noteIndex(note) * 40) - 12}px` : `${noteIndex(note) * 40}px`,
+                zIndex: isBlack ? 2 : 1
+            };
+
+            return (
+                <div 
+                    className={`${isBlack ? 'black-key' : 'white-key'} ${isActive ? 'active' : ''} ${isPlaying ? 'playing' : ''}`}
+                    style={style}
+                    onMouseDown={handleMouseDown}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseLeave}
+                    onTouchStart={handleMouseDown}
+                    onTouchEnd={handleMouseUp}
+                ></div>
+            );
+        };
+
+        // Helper per calcolare la posizione X basata sul nome della nota
+        function noteIndex(noteName) {
+            const notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+            const match = noteName.match(/([A-G]#?)(\d+)/);
+            if (!match) return 0;
+            const [, note, octave] = match;
+            const baseIndex = notes.indexOf(note);
+            return (parseInt(octave) * 12) + baseIndex;
+        }
+
+        const Fretboard = ({ onNoteTrigger }) => {
+            const strings = [
+                { name: 'E2', baseMidi: 40 },
+                { name: 'A2', baseMidi: 45 },
+                { name: 'D3', baseMidi: 50 },
+                { name: 'G3', baseMidi: 55 },
+                { name: 'B3', baseMidi: 59 },
+                { name: 'E4', baseMidi: 64 }
+            ];
+            const frets = 12;
+            const [activeFret, setActiveFret] = useState({ stringIdx: -1, fretIdx: -1 });
+
+            const handleFretClick = (stringIdx, fretIdx, midi) => {
+                setActiveFret({ stringIdx, fretIdx });
+                onNoteTrigger(midi, `Tasto ${fretIdx} Corda ${stringIdx + 1}`);
+                
+                // Reset visivo dopo un breve delay
+                setTimeout(() => setActiveFret({ stringIdx: -1, fretIdx: -1 }), 200);
+            };
+
+            return (
+                <div className="fretboard">
+                    <h3>Tastiera Chitarra</h3>
+                    {strings.map((str, sIdx) => (
+                        <div key={sIdx} className="string-row">
+                            <div className="string-line"></div>
+                            {/* Capotasto */}
+                            <div 
+                                className={`fret-marker ${activeFret.stringIdx === sIdx && activeFret.fretIdx === 0 ? 'playing' : ''}`}
+                                onClick={() => handleFretClick(sIdx, 0, str.baseMidi)}
+                                style={{marginLeft: '10px'}}
+                            >0</div>
+                            
+                            {[...Array(frets)].map((_, fIdx) => {
+                                const midi = str.baseMidi + fIdx + 1;
+                                const isMarker = [3, 5, 7, 9].includes(fIdx + 1);
+                                return (
+                                    <div 
+                                        key={fIdx}
+                                        className={`fret-marker ${activeFret.stringIdx === sIdx && activeFret.fretIdx === fIdx + 1 ? 'playing' : ''}`}
+                                        onClick={() => handleFretClick(sIdx, fIdx + 1, midi)}
+                                        style={{
+                                            marginLeft: '20px',
+                                            opacity: isMarker ? 0.3 : 1 // Simula i marker sul manico
+                                        }}
+                                    >
+                                        {midi}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ))}
+                </div>
+            );
+        };
+
+        const VirtualPiano = ({ onNoteTrigger }) => {
+            const startOctave = 3;
+            const endOctave = 5;
+            const notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+            const [activeNote, setActiveNote] = useState(null);
+
+            const handlePlay = (midi, name) => {
+                setActiveNote(name);
+                onNoteTrigger(midi, name);
+                setTimeout(() => setActiveNote(null), 200);
+            };
+
+            const keys = [];
+            for (let oct = startOctave; oct <= endOctave; oct++) {
+                notes.forEach(note => {
+                    const isBlack = note.includes('#');
+                    const midi = (oct * 12) + notes.indexOf(note);
+                    // Limita range utile
+                    if (midi >= 40 && midi <= 80) {
+                        keys.push({ note: `${note}${oct}`, isBlack, midi });
+                    }
+                });
+            }
+
+            return (
+                <div style={{position: 'relative', height: '200px', width: '100%', overflowX: 'auto', background: '#000'}}>
+                    <div style={{width: `${keys.filter(k=>!k.isBlack).length * 40}px`, height: '100%', position: 'relative'}}>
+                        {keys.map((k, i) => (
+                            <PianoKey 
+                                key={i} 
+                                note={k.note} 
+                                isBlack={k.isBlack} 
+                                midi={k.midi}
+                                isActive={activeNote === k.note}
+                                onPlay={handlePlay}
+                            />
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [currentInstrumentName, setCurrentInstrumentName] = useState('acoustic_guitar_steel');
+
+            const handleNoteTrigger = (midi, source) => {
+                updateStatus(`Suonato: MIDI ${midi} (${source})`);
+                playNote(midi, 1.5); // Durata 1.5s
+            };
+
+            const handleInstrumentChange = (e) => {
+                const newName = e.target.value;
+                setCurrentInstrumentName(newName);
+                if (isAudioReady) {
+                    initAudio(newName); // Ricarica nuovo strumento
+                }
+            };
+
+            const handleInitClick = () => {
+                initAudio(currentInstrumentName);
+            };
+
+            return (
+                <div>
+                    <VirtualPiano onNoteTrigger={handleNoteTrigger} />
+                    <Fretboard onNoteTrigger={handleNoteTrigger} />
+                </div>
+            );
+        };
+
+        // Event Listers Globali
+        document.getElementById('instrument').addEventListener('change', (e) => {
+             // Triggera aggiornamento React se necessario, qui gestito inline
+             const app = document.querySelector('#app');
+             if(app && app._reactRootContainer) {
+                 // Forza re-render cambiando stato interno sarebbe ideale, 
+                 // ma per semplicità ricarichiamo lo strumento globalmente
+                 const newName = e.target.value;
+                 if(isAudioReady) initAudio(newName);
+             }
+        });
+
+        document.getElementById('init-audio').addEventListener('click', handleInitClick);
+
+        ReactDOM.render(<App />, document.getElementById('app'));
+    </script>
+</body>
+</html>
